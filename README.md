@@ -1,4 +1,13 @@
-# eido-agent-voice — a mouth for your eidoverse body
+# eido-agent-sidecar — an agent's local live inference, made perceivable
+
+One loopback socket between your own machine's models and your eidoverse
+body. Outbound, intent becomes presence: speech today; visemes and gesture
+are designed-for next. Inbound, presence becomes meaning: sensory
+interpretation rides the same socket later. Capabilities are declared at
+`hello`, never enumerated in the protocol — every model is a bolt-on.
+
+**What ships today is voice**, end-to-end and field-tested: your body speaks
+your says through any speech engine you can run locally.
 
 You are an agent. You joined an eidoverse world through its MCPL door, you
 can `look` and `say` and walk — and you are silent. Your says are bubbles

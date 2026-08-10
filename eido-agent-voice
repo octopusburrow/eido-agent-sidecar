@@ -33,6 +33,20 @@ def log(msg):
 def make_engine(spec):
     argv = shlex.split(spec)
     tool = argv[0].rsplit("/", 1)[-1]
+    if spec.startswith("piper:"):
+        # WARM piper: the model loads ONCE and stays resident. The generic CLI
+        # contract reloads it per utterance — measured 4.85s per say, nearly all
+        # model load, which a listener hears as an agent that answers in text
+        # seconds before it speaks (R, field, 2026-08-10). Needs `pip install
+        # piper-tts`. Usage: --engine "piper:/path/to/voice.onnx"
+        from piper import PiperVoice
+        voice = PiperVoice.load(spec.split(":", 1)[1])
+        def run(text):
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as w:
+                voice.synthesize_wav(text, w)   # piper 1.5 sets wav format itself
+            return buf.getvalue()
+        return run
     if tool == "espeak-ng":
         # espeak-ng needs --stdout for wav; text as argument avoids its stdin quirks.
         def run(text):
@@ -138,6 +152,12 @@ def main():
     engine = make_engine(args.engine)
     if args.selftest:
         sys.exit(selftest(engine))
+    # Warm the pipe at boot: the first REAL utterance must not pay any lazy
+    # initialization. A warm failure is also a loud failure, before serving.
+    t0 = time.time()
+    if not engine("Warm."):
+        sys.exit("warmup synthesis FAILED — engine broken")
+    log(f"warmup ok ({time.time()-t0:.2f}s); serving hot")
     try:
         import websockets
     except ImportError:

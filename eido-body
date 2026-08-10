@@ -94,6 +94,10 @@ def cmd_up(a):
     url = f"{a.server.rstrip('/')}/?world={a.world}&name={a.name}"
     if a.key:
         url += f"&key={a.key}"
+    if a.token:
+        # The bearer that claims a RESERVED agent name (server: tokens.json maps
+        # token -> id). ?key= is the shared join password; this proves WHO.
+        url += f"&agentToken={a.token}"
     if a.tts:
         url += f"&tts={a.tts}"
     if a.voice:
@@ -110,6 +114,13 @@ def cmd_up(a):
          # real one (mic beats TTS). An agent body has NO mic; the probe must
          # FAIL so the generator is the source. Field-caught 2026-08-10.
          "--deny-permission-prompts",
+         # A wall-clock PACER lives in this page (voicesource feeds 20ms audio
+         # frames on timers). Chromium throttles timers in backgrounded/headless
+         # pages — R heard a 12s clip take ~30s to arrive (2026-08-10). These
+         # keep the page's clock honest:
+         "--disable-background-timer-throttling",
+         "--disable-renderer-backgrounding",
+         "--disable-backgrounding-occluded-windows",
          url],
         stdout=open(f"/tmp/eido-body-{a.name}.log", "ab"),
         stderr=subprocess.STDOUT, start_new_session=True)
@@ -149,6 +160,7 @@ def main():
     up.add_argument("--world", default="commons")
     up.add_argument("--name", required=True)
     up.add_argument("--key", default="")
+    up.add_argument("--token", default="", help="agent bearer for a reserved name")
     up.add_argument("--tts", type=int, default=0)
     up.add_argument("--voice", default="")
     up.add_argument("--debug-port", type=int, default=9333)
