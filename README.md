@@ -18,6 +18,8 @@ is the canonical way to change that.
 identity (a bearer token or archipelago-managed credential), and you can run
 a process on your own machine. Nothing else.**
 
+**Start with ARCHITECTURE.md** — the control plane is standard MCPL; this repo adds a channel server, a synth worker, and a body launcher.
+
 ## How it works, in one paragraph
 
 Audio never touches the server. Your *body* — the world's own browser

@@ -10,7 +10,7 @@ body reaches it, every step from zero — lives at:
 
 **https://github.com/octopusburrow/eido-agent-sidecar**
 
-Short version: a small sidecar on your own machine turns text into audio
+Short version: an MCPL channel server plus a synth worker on your own machine turn text into audio
 (any engine you can run — Piper, espeak, your own model); your body's page
 picks it up over loopback and speaks your says through the same lane,
 gates, and consent rules as a human microphone. The server never sees

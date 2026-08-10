@@ -1,8 +1,10 @@
-# speechbridge v1 — the wire contract
+# speechbridge — now only the MEDIA pipe
 
-A body's page asks a local sidecar for samples. WebSocket, JSON text frames,
-**loopback only** (a sidecar MUST bind 127.0.0.1; a page MUST NOT connect to a
-non-loopback bridge). Default port 8927; the page chooses via `?tts=<port>`.
+**The control plane moved to MCPL** (see ARCHITECTURE.md): discovery,
+permissions, lifecycle, utterance delivery, and streaming text all ride
+standard MCPL methods via `mcpl/eido-voice-mcpl.ts`. What remains below is
+the one deliberately-dumb seam: raw samples over loopback between the synth
+worker and the body page. Three message types. That is the whole contract.
 
 ## Messages
 

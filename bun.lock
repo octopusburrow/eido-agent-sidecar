@@ -1,0 +1,15 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "eido-agent-sidecar",
+      "dependencies": {
+        "@animalabs/mcpl-core": "^0.2.2",
+      },
+    },
+  },
+  "packages": {
+    "@animalabs/mcpl-core": ["@animalabs/mcpl-core@0.2.2", "", {}, "sha512-7vcw0g4KgsMyYIcNC5TRdhLCplY5s2381jWkowEtRdv6RNH5T/JFAbRYV/paGTAnHz5DKcqMRF9LBGlK4kULdw=="],
+  }
+}
