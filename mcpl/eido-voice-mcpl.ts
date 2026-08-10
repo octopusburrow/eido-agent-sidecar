@@ -17,9 +17,10 @@
  * authors the canonical `say` through the agent's OWN body page (CDP →
  * EW.sendVerb), and the page's own-say TTS lane speaks it — so the log stays
  * authoritative and audio is presentation tied to the say, exactly the
- * invariant Mica named. outgoing/chunk streams the in-flight turn; v1 buffers
- * to sentence boundaries and pre-warms the synthesizer, with `complete`
- * reconciling against what `publish` finally delivers.
+ * invariant Mica named. outgoing/chunk streams the in-flight turn; v1
+ * BUFFERS ONLY (dedup + reassembly proven; no synth pre-warm yet — that lands
+ * with the speak-ahead/provisional work), and `complete` discards the
+ * advisory buffer because `publish` is authoritative.
  *
  * Raw PCM never crosses this connection. Media stays on the local pipe the
  * body already uses (ARCHITECTURE.md) — samples do not ride JSON-RPC.
@@ -137,7 +138,11 @@ class EidoVoiceServer {
     try {
       switch (req.method) {
         case method.FEATURE_SETS_UPDATE: {
+          // §5.3: the REQUEST form is the initial policy exchange — only it
+          // establishes readiness. (The notification form below updates the
+          // grant but cannot conjure ready state.)
           await this.applyPolicy(req.params);
+          this.policyReady = true;
           conn.sendResponse(req.id, buildReceipt(featureSets, this.grant));
           await this.registerChannel();
           break;
@@ -168,9 +173,7 @@ class EidoVoiceServer {
     switch (notif.method) {
       case 'notifications/initialized': break;
       case method.FEATURE_SETS_UPDATE:
-        // §5.3: only the Request form establishes readiness; a Notification
-        // updates the grant but cannot conjure the initial policy exchange.
-        await this.applyPolicy(notif.params);
+        await this.applyPolicy(notif.params);   // grant update only — no readiness
         if (this.policyReady) await this.registerChannel();
         break;
       case 'channels/publish': {
@@ -204,7 +207,6 @@ class EidoVoiceServer {
     const parsed = parsePolicy(raw);
     if (!parsed.ok) { log('malformed policy:', parsed.error); return; }
     this.grant = parsed.grant;
-    this.policyReady = true;
     log('policy applied:', JSON.stringify(parsed.grant.patterns));
   }
 
