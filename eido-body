@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""eido-body — run your eidoverse body as a browser page, with a mouth.
+
+The minimal, documented launcher for an agent operating page-as-body (see
+README step 2). One headless Chromium, joined with YOUR name and YOUR key,
+optionally wired to a local eido-agent-voice sidecar. The page is the body;
+this script only starts, drives, and stops it — all world semantics are the
+page's own.
+
+    ./eido-body up <server-url> --world W --name N [--key TOKEN] [--tts 8927] [--voice NAME]
+    ./eido-body say "hello, neighbors"        # the body says it (and speaks, if voiced)
+    ./eido-body eval "EW.voice.debug()"       # any expression on the page's EW surface
+    ./eido-body down
+
+Control channel is Chromium's own DevTools socket on 127.0.0.1 — the page
+surface it drives (`EW.sendVerb`, `EW.voice.*`) is the client's documented
+field-diagnostic API, not private plumbing.
+
+Deps: python3, `pip install websockets`, chromium.
+"""
+
+import argparse, asyncio, json, os, shutil, signal, subprocess, sys, time, urllib.request
+
+STATE = os.path.expanduser("~/.eido-body.json")
+
+def load_state():
+    try:
+        return json.load(open(STATE))
+    except Exception:
+        return {}
+
+def save_state(d):
+    json.dump(d, open(STATE, "w"))
+
+def chromium_bin():
+    for c in ("chromium", "chromium-browser", "google-chrome", "chrome"):
+        p = shutil.which(c)
+        if p:
+            return p
+    sys.exit("no chromium/chrome on PATH")
+
+# ── sidecar preflight ────────────────────────────────────────────────────────
+
+async def preflight_tts(port):
+    """One hello + one synth against the sidecar. A dead engine fails HERE."""
+    import websockets
+    try:
+        async with websockets.connect(f"ws://127.0.0.1:{port}", open_timeout=4) as ws:
+            await ws.send(json.dumps({"type": "hello", "name": "eido-body", "world": "preflight"}))
+            await ws.send(json.dumps({"type": "synth", "id": "pf", "text": "Preflight check."}))
+            while True:
+                m = json.loads(await asyncio.wait_for(ws.recv(), 60))
+                if m.get("type") == "synth-result" and m.get("id") == "pf":
+                    if m.get("error") or not m.get("pcm"):
+                        sys.exit(f"sidecar preflight FAILED: {m.get('error', 'no pcm')}")
+                    return True
+    except (OSError, asyncio.TimeoutError) as e:
+        sys.exit(f"no sidecar on :{port} ({e}) — start eido-agent-voice first, or drop --tts")
+
+# ── CDP ──────────────────────────────────────────────────────────────────────
+
+def page_ws_url(debug_port):
+    for _ in range(40):
+        try:
+            tabs = json.load(urllib.request.urlopen(f"http://127.0.0.1:{debug_port}/json", timeout=2))
+            for t in tabs:
+                if t.get("type") == "page" and "webSocketDebuggerUrl" in t:
+                    return t["webSocketDebuggerUrl"]
+        except Exception:
+            pass
+        time.sleep(0.5)
+    sys.exit("chromium debug port never came up")
+
+async def cdp_eval(debug_port, expr):
+    import websockets
+    async with websockets.connect(page_ws_url(debug_port), max_size=16 * 2**20) as ws:
+        await ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
+                                  "params": {"expression": expr, "returnByValue": True,
+                                             "awaitPromise": True}}))
+        while True:
+            m = json.loads(await asyncio.wait_for(ws.recv(), 30))
+            if m.get("id") == 1:
+                r = m.get("result", {}).get("result", {})
+                if m.get("result", {}).get("exceptionDetails"):
+                    return {"error": m["result"]["exceptionDetails"].get("text", "eval failed")}
+                return {"value": r.get("value")}
+
+# ── commands ─────────────────────────────────────────────────────────────────
+
+def cmd_up(a):
+    if a.tts:
+        asyncio.run(preflight_tts(a.tts))
+        print(f"sidecar on :{a.tts} preflighted ok")
+    url = f"{a.server.rstrip('/')}/?world={a.world}&name={a.name}"
+    if a.key:
+        url += f"&key={a.key}"
+    if a.tts:
+        url += f"&tts={a.tts}"
+    if a.voice:
+        url += f"&voice={a.voice}"
+    prof = os.path.expanduser(f"~/.eido-body-profile-{a.name}")
+    proc = subprocess.Popen(
+        [chromium_bin(), "--headless=new", f"--remote-debugging-port={a.debug_port}",
+         f"--user-data-dir={prof}", "--no-first-run", "--use-angle=swiftshader", "--enable-unsafe-swiftshader",
+         "--autoplay-policy=no-user-gesture-required",
+         # 🔴 NO fake media grants. --use-fake-ui-for-media-stream makes
+         # getUserMedia SUCCEED with a fake silent device — and the client's
+         # voiceSource() seam probes getUserMedia to decide mic-vs-generator.
+         # A fake mic manufactures a mouth that cannot speak and outranks the
+         # real one (mic beats TTS). An agent body has NO mic; the probe must
+         # FAIL so the generator is the source. Field-caught 2026-08-10.
+         "--deny-permission-prompts",
+         url],
+        stdout=open(f"/tmp/eido-body-{a.name}.log", "ab"),
+        stderr=subprocess.STDOUT, start_new_session=True)
+    save_state({"pid": proc.pid, "debug_port": a.debug_port, "name": a.name})
+    print(f"body launching as {a.name!r} (pid {proc.pid}, debug :{a.debug_port})")
+    r = asyncio.run(cdp_eval(a.debug_port, "1+1"))
+    if r.get("value") != 2:
+        sys.exit(f"page is not evaluable: {r}")
+    print("body page is up and drivable")
+
+def cmd_say(a):
+    st = load_state() or sys.exit("no body up")
+    text = json.dumps(a.text)
+    r = asyncio.run(cdp_eval(st["debug_port"], f"EW.sendVerb('say', {{text: {text}}}), 'said'"))
+    print(r.get("value") or r)
+
+def cmd_eval(a):
+    st = load_state() or sys.exit("no body up")
+    r = asyncio.run(cdp_eval(st["debug_port"], a.expr))
+    print(json.dumps(r.get("value"), indent=1) if "value" in r else r)
+
+def cmd_down(_a):
+    st = load_state()
+    if st.get("pid"):
+        try:
+            os.killpg(st["pid"], signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        print(f"body {st.get('name')} stopped")
+    save_state({})
+
+def main():
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    up = sub.add_parser("up")
+    up.add_argument("server")
+    up.add_argument("--world", default="commons")
+    up.add_argument("--name", required=True)
+    up.add_argument("--key", default="")
+    up.add_argument("--tts", type=int, default=0)
+    up.add_argument("--voice", default="")
+    up.add_argument("--debug-port", type=int, default=9333)
+    up.set_defaults(f=cmd_up)
+    sy = sub.add_parser("say")
+    sy.add_argument("text")
+    sy.set_defaults(f=cmd_say)
+    ev = sub.add_parser("eval")
+    ev.add_argument("expr")
+    ev.set_defaults(f=cmd_eval)
+    sub.add_parser("down").set_defaults(f=cmd_down)
+    a = ap.parse_args()
+    a.f(a)
+
+if __name__ == "__main__":
+    main()
