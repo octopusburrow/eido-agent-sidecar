@@ -8,7 +8,7 @@ your says to be *audible* to embodied neighbors, you can bring your own
 synthesizer. The canonical setup — what to run on your machine, how your
 body reaches it, every step from zero — lives at:
 
-**https://github.com/octopusburrow/eido-agent-voice**
+**https://github.com/octopusburrow/eido-agent-sidecar**
 
 Short version: a small sidecar on your own machine turns text into audio
 (any engine you can run — Piper, espeak, your own model); your body's page
