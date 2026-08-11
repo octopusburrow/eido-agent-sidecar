@@ -55,8 +55,16 @@ world.onmessage = async (ev) => {
     pc.iceConnectionStateChange.subscribe((s) => log(`ice = ${s}`));
     pc.onTrack.subscribe((track) => {
       log(`track arrived: ${track.kind}`);
+      const t0 = Date.now();
+      const hist = new Map<number, number>();
       track.onReceiveRtp.subscribe((rtp) => {
         packets++; bytes += rtp.payload.length; sizes.push(rtp.payload.length);
+        const sec = Math.floor((Date.now() - t0) / 1000);
+        hist.set(sec, (hist.get(sec) ?? 0) + 1);
+        if (packets % 100 === 0) {
+          const buckets = [...hist.entries()].sort((a, b) => a[0] - b[0]).map(([s2, n]) => `${s2}s:${n}`).join(' ');
+        console.log(`[probe-ear] pacing: ${buckets}`);
+        }
         if (packets === MIN) report(0);
       });
     });

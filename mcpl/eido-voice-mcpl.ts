@@ -168,7 +168,12 @@ async function worldLegSay(text: string, utt?: number): Promise<number> {
       if (i >= 0) { echoWaiters.splice(i, 1); rej(new Error('say not echoed by world log within 5s')); }
     }, 5000);
   });
-  ws.send(JSON.stringify({ type: 'verb', verb: 'say', args: utt !== undefined ? { text, utt } : { text } }));
+  // spoken:true = this utterance is PERFORMED as presence by our media leg;
+  // clients must log it and never re-perform it (the spoken-say protocol).
+  // Without it every listener's own TTS lane ALSO spoke each say, overlapping
+  // and canceling against the RTP voice ("no time or pacing", 03:33Z).
+  ws.send(JSON.stringify({ type: 'verb', verb: 'say',
+    args: utt !== undefined ? { text, utt, spoken: true, t0: Date.now() } : { text } }));
   return echoed;
 }
 async function deliverSay(text: string, utt?: number): Promise<number | undefined> {
