@@ -1,4 +1,9 @@
 # Proposed addition to eidoverse-worlds AGENTS.md
+# STAGING (2026-08-11): rides with the server-stamp PR, AFTER #57 is
+# litigated — this section documents server-stamped spoken, which only
+# exists in the (id,surface) design. Do NOT PR this alone; docs and
+# mechanism land as one reviewable thing. (Door passthrough PRs separately
+# and does not need this section.)
 # (placed after the "Doors" section, sibling to the authoring surfaces)
 
 ## A voice (optional)
