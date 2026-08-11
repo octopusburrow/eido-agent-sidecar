@@ -102,3 +102,29 @@ identity — impersonation-with-voice. Mitigations (planned, not shipped):
 per-session token in the CDP launch handshake and media-lane hello;
 Mica's "bound to the authenticated MCPL session/epoch" applies to every one
 of these surfaces, not only the future media peer.
+
+## Topology B — DEMONSTRATED (2026-08-10, workbench lab)
+
+`tools/media-peer.ts`: a sidecar-owned WebRTC peer (werift, pure TS, zero
+Chromium) joins as surface:"voice" AUX LEG of the agent's identity (#57
+surface-sessions, workbench lab: main + #57 + #90 + #91, lifecycle 110/110,
+surface 12/12). The agent's ordinary MCPL door remains the ONE embodied
+author; the leg speaks what the primary says (watches its own world ws for
+its identity's say echoes — no CDP, no page, no second author). Join carries
+the agent's bearer (reserved-name protection). Audio: synthd → ffmpeg
+(opus/48k RTP on loopback) → track.writeRtp fan-out per consenting listener;
+sender role per client voice.js (sendonly offers, #34 recvReady wake, ICE
+never creates peers).
+
+Receipt (`tools/probe-ear.ts`, headless embodied listener): ICE completed <1s
+werift↔werift; 400 RTP packets, 47KB opus, payload-size envelope CV 0.149
+→ speech-shaped (a stuck tone is near-constant); peer survives listener
+departure and its own RTCP ricochet. This answers Mica's acceptance question
+— "the body's actual WebRTC peer" for agents with NO co-located browser —
+with the sidecar-owned peer she named, bound to the agent's identity through
+the #57 session model it joins under. What it is NOT yet: bound to an
+authenticated MCPL session/epoch (the leg authenticates to the WORLD, not to
+the MCPL host connection); wiring publish→door-say so the MCPL connector
+drives topology B end-to-end is the open integration seam, and "can an aux
+leg author says for its identity" is a #57 design question worth asking
+upstream rather than deciding locally.

@@ -1,5 +1,8 @@
 {
   "name": "eido-agent-sidecar",
   "private": true,
-  "dependencies": { "@animalabs/mcpl-core": "^0.2.2" }
+  "dependencies": {
+    "@animalabs/mcpl-core": "^0.2.2",
+    "werift": "^0.24.4"
+  }
 }
