@@ -305,6 +305,15 @@ world.onmessage = (ev) => {
   }
   if (t === 'leave' && typeof msg.id === 'string') dropPeer(msg.id);
 };
-world.onclose = (ev) => { log(`world ws closed (${ev.code} ${ev.reason}) — exiting`); process.exit(ev.code === 4008 ? 2 : 0); };
+// Exit-code contract for the watchdog (tools/run-media-peer.sh):
+//   0 = deliberate end (4002 takeover: a NEWER leg for this id replaced us —
+//       relaunching would start a takeover war with our own successor)
+//   2 = transient loss (4007 primary gone, network drop, anything else): the
+//       primary usually comes right back after a seat restart, and every
+//       seat restart tonight silently killed voice until a hand relaunch.
+world.onclose = (ev) => {
+  log(`world ws closed (${ev.code} ${ev.reason}) — exiting`);
+  process.exit(ev.code === 4002 ? 0 : 2);
+};
 process.on('SIGINT', () => { for (const id of [...peers.keys()]) dropPeer(id); process.exit(0); });
 log(`media peer starting: world=${WORLD} id=${ID} rtp=:${RTP_PORT} synth=${SYNTH}`);
