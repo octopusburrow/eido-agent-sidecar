@@ -192,7 +192,13 @@ function speak(text: string): void {
   const chunks = ttsChunks(text);
   if (!chunks.length) { log('utterance has no spoken form (emoji/markdown only)'); return; }
   log(`chunked into ${chunks.length}: ${chunks.map((c) => c.length).join('+')} chars`);
-  for (const c of chunks) speaking = speaking.then(() => speakNow(c)).catch((e) => log('speak failed:', (e as Error).message));
+  // EAGER synth: every chunk's synthesis starts NOW; the serialized speaking
+  // chain only orders the writes. Joins never wait on piper again (defect 1).
+  const ready = chunks.map((c) => synth(c));
+  chunks.forEach((c, i) => {
+    const breathAfter = sentenceFinal(c) || i === chunks.length - 1;
+    speaking = speaking.then(() => speakNow(c, { pcmReady: ready[i], breathAfter })).catch((e) => log('speak failed:', (e as Error).message));
+  });
 }
 
 // ONE persistent encoder, real-time paced. A per-utterance ffmpeg blasted the
@@ -215,21 +221,29 @@ function ensureEncoder(): Subprocess<'pipe'> {
   return encoder;
 }
 
-async function speakNow(text: string): Promise<void> {
-  const pcm = await synth(text);
-  if (!pcm) return;
-  if (pcm.rate !== PIPER_RATE) { log(`unexpected synth rate ${pcm.rate} — skipping`); return; }
+import { trimEdges, fade, silencePcm, sentenceFinal, BREATH_MS } from './pcm-craft.ts';
+
+async function writePcm(data: Uint8Array): Promise<void> {
   const ff = ensureEncoder();
   // AWAIT THE BACKPRESSURE. The encoder reads realtime (-re): the pipe holds
   // ~1.5s of PCM and a fire-and-forget write silently loses the rest — every
   // sentence started and died mid-breath ("kept cutting you off", 03:32Z).
-  // Write in slices and honor the promise bun returns when the pipe is full.
-  for (let off = 0; off < pcm.data.length; off += 16384) {
-    const r = ff.stdin.write(pcm.data.subarray(off, off + 16384));
+  for (let off = 0; off < data.length; off += 16384) {
+    const r = ff.stdin.write(data.subarray(off, off + 16384));
     if (r instanceof Promise) await r;
   }
   await ff.stdin.flush?.();
-  log(`streamed ${pcm.data.length} bytes pcm → encoder (${peers.size} peer(s))`);
+}
+
+async function speakNow(text: string, opts?: { pcmReady?: Promise<{ data: Uint8Array; rate: number } | null>; breathAfter?: boolean }): Promise<void> {
+  const pcm = await (opts?.pcmReady ?? synth(text));
+  if (!pcm) return;
+  if (pcm.rate !== PIPER_RATE) { log(`unexpected synth rate ${pcm.rate} — skipping`); return; }
+  const trimmed = trimEdges(pcm.data, pcm.rate);
+  fade(trimmed, pcm.rate);
+  await writePcm(trimmed);
+  if (opts?.breathAfter !== false) await writePcm(silencePcm(BREATH_MS, pcm.rate));
+  log(`streamed ${trimmed.length} bytes pcm → encoder (${peers.size} peer(s))`);
 }
 
 function synth(text: string): Promise<{ data: Uint8Array; rate: number } | null> {
