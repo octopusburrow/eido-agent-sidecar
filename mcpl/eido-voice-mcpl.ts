@@ -56,6 +56,10 @@ const featureSets: FeatureSetMap = {
     description: 'Receive moderated in-flight text deltas to synthesize ahead of delivery (SPEC §14.3 voice-synthesis lane)',
     uses: ['channels.streaming'],
   },
+  'speech.synthesis': {
+    description: 'Render utterance text to audio via HOST-routed inference (prototype for content blocks in inference responses — one sentence-sized block per response, no streaming)',
+    uses: ['inferenceRequest'],
+  },
 };
 
 // ── the body: CDP into the agent's own page ──────────────────────────────────
@@ -83,6 +87,16 @@ async function bodySay(text: string): Promise<void> {
   } finally { ws.close(); }
 }
 
+// ── media lane: the page's EXISTING ?tts= dialect, fulfilled via the host ────
+// No new protocol: the page dials the same 3-message synth contract it always
+// has ({type:"synth",id,text} → {type:"synth-result",id,pcm,sampleRate}); this
+// server fulfills each pull with inference/request to the HOST, whose route
+// executes the model wherever it likes (a standalone, killable synth process).
+// Samples never ride the MCPL connection except as the proposed §10.3 audio
+// block in the inference RESPONSE — sentence-sized, base64, no streaming.
+
+const MEDIA_PORT = Number(process.env.EIDO_MEDIA_PORT ?? 8931);
+
 // ── the server ───────────────────────────────────────────────────────────────
 
 type ReqMsg = { id: number | string; method: string; params?: unknown };
@@ -93,6 +107,7 @@ class EidoVoiceServer {
   private grant: Grant = EMPTY_GRANT;
   private policyReady = false;
   private registered = false;
+  private synthServed = 0;
   /** outgoing/chunk sentence buffers, keyed by inferenceId (SPEC §14.3: index
    *  is monotonic per inference; per-channel concat reconstructs the text). */
   private streams = new Map<string, { buf: string; lastIndex: number }>();
@@ -214,6 +229,49 @@ class EidoVoiceServer {
     return this.policyReady && capabilityGranted(this.grant, 'channels.publish');
   }
 
+  /** Ask the HOST to render text — the prototype's whole point. Returns
+   *  s16le PCM + rate, decoded from the audio content block in the response.
+   *  Tolerates a plain-string response (spec 0.5 hosts) by returning null. */
+  private async hostSynth(text: string): Promise<{ pcm: string; sampleRate: number } | null> {
+    if (!this.policyReady || !capabilityGranted(this.grant, 'inferenceRequest')) return null;
+    const res = await this.conn!.sendRequest('inference/request', {
+      featureSet: 'speech.synthesis',
+      stream: false,
+      messages: [{ role: 'user', content: text }],
+    }, 30000) as { content?: unknown };
+    const c = res?.content;
+    if (typeof c === 'string' || !Array.isArray(c)) return null;   // text-only host
+    const block = c.find((b) => (b as { type?: string }).type === 'audio') as
+      { data?: string; mimeType?: string } | undefined;
+    if (!block?.data) return null;
+    const rate = Number(/rate=(\d+)/.exec(block.mimeType ?? '')?.[1] ?? 22050);
+    return { pcm: block.data, sampleRate: rate };
+  }
+
+  startMediaLane(): void {
+    Bun.serve({
+      port: MEDIA_PORT, hostname: '127.0.0.1',
+      fetch: (req, srv) => srv.upgrade(req) ? undefined : new Response('synth ws', { status: 426 }),
+      websocket: {
+        message: async (ws, raw) => {
+          let m: { type?: string; id?: unknown; text?: string };
+          try { m = JSON.parse(String(raw)); } catch { return; }
+          if (m.type !== 'synth' || !m.text) return;
+          try {
+            const out = await this.hostSynth(m.text);
+            if (out) { this.synthServed++; ws.send(JSON.stringify({ type: 'synth-result', id: m.id, pcm: out.pcm, sampleRate: out.sampleRate })); }
+            else ws.send(JSON.stringify({ type: 'synth-error', id: m.id, error: 'host returned no audio block' }));
+          } catch (e) {
+            ws.send(JSON.stringify({ type: 'synth-error', id: m.id, error: (e as Error).message }));
+          }
+        },
+      },
+    });
+    log(`media lane on 127.0.0.1:${MEDIA_PORT} (page dialect, host-fulfilled)`);
+  }
+
+  servedCount(): number { return this.synthServed; }
+
   private channelDescriptors() {
     return [{
       id: CHANNEL_ID,
@@ -221,7 +279,7 @@ class EidoVoiceServer {
       label: `voice — ${WORLD} (embodied)`,
       direction: 'outbound',
       address: { world: WORLD, surface: 'voice' },
-      metadata: { serverId: 'eido-voice-mcpl', media: 'local-pipe' },
+      metadata: { serverId: 'eido-voice-mcpl', media: `local-pipe:${MEDIA_PORT}` },
     }];
   }
 
@@ -251,7 +309,9 @@ function extractText(p: Record<string, unknown>): string {
 
 if (process.argv.includes('--stdio') || !process.stdin.isTTY) {
   const conn = McplConnection.fromStreams(process.stdin, process.stdout);
-  new EidoVoiceServer().serve(conn).then(() => process.exit(0));
+  const srv = new EidoVoiceServer();
+  srv.startMediaLane();
+  srv.serve(conn).then(() => process.exit(0));
 } else {
   console.error('usage: eido-voice-mcpl.ts --stdio  (JSON-RPC over stdio; spawned by an MCPL host)');
   process.exit(2);

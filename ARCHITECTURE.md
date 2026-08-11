@@ -46,6 +46,16 @@ bound to the authenticated MCPL session/epoch — no page at all. Depends on
 the (id, surface) session model (eidoverse-worlds#57) so the media peer is a
 leg of the agent's identity rather than a second participant.
 
+**C — host-routed inference (prototype PASSING; needs one spec field).**
+The connector's media lane answers the page's existing `?tts=` dialect by
+sending `inference/request` (featureSet `speech.synthesis`) to the HOST,
+which routes to a standalone synth process it can kill/restart at will, and
+returns ONE sentence-sized §10.3 audio block in the response — the field
+§11.3 currently pins to `string`. No realtime frames in JSON-RPC (Mica's
+line); warmth becomes a host-backend property; the sidecar decays into a
+reference backend. Receipt: `tools/e2e-inference.mjs` (their harness playing
+host). Proposal draft: notes → mcpl issue, pending review.
+
 ## Verification
 
 Driven end-to-end by the ecosystem's own host harness
