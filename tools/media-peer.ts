@@ -186,7 +186,7 @@ setInterval(() => {
 udp.bind(RTP_PORT, '127.0.0.1');
 
 let speaking: Promise<void> = Promise.resolve();
-function speak(text: string): void {
+function speak(text: string, seq?: number): void {
   // Chunked: sentence 1 is in the air while sentence 2 synthesizes —
   // time-to-first-word stays ~synth(one sentence) regardless of length.
   const chunks = ttsChunks(text);
@@ -199,6 +199,20 @@ function speak(text: string): void {
     const breathAfter = sentenceFinal(c) || i === chunks.length - 1;
     speaking = speaking.then(() => speakNow(c, { pcmReady: ready[i], breathAfter })).catch((e) => log('speak failed:', (e as Error).message));
   });
+  // #57 B1: the performance receipt. Once every chunk has actually been
+  // written to the encoder (not merely synthesized), attest the say by seq +
+  // sha256 of its FULL text — the server verifies both and broadcasts
+  // `performed`, releasing every listener's hold. Sent only on full success:
+  // a crash mid-utterance must leave the receipt unsent so fallback fires.
+  if (Number.isSafeInteger(seq)) {
+    speaking = speaking.then(async () => {
+      const digest = Array.from(new Uint8Array(
+        await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))))
+        .map((b) => b.toString(16).padStart(2, '0')).join('');
+      world.send(JSON.stringify({ type: 'attest', seq, digest }));
+      log(`attested seq ${seq}`);
+    }).catch((e) => log(`attest failed: ${e}`));
+  }
 }
 
 // ONE persistent encoder, real-time paced. A per-utterance ffmpeg blasted the
@@ -289,12 +303,16 @@ world.onmessage = (ev) => {
   if (t === 'log') {
     const e = msg.entry as { actor?: string; verb?: string; args?: { text?: string; spoken?: boolean } } | undefined;
     if (e?.verb === 'say' && e.actor === ID && e.args?.text) {
-      // Perform ONLY says marked spoken:true — the ones our own stack authored
-      // for this leg. Unmarked says (the door talking on the text tier) belong
-      // to each listener's client-side TTS; performing them here made two
-      // voices speak every utterance.
-      if (e.args.spoken === true) { log(`performing: "${e.args.text.slice(0, 60)}"`); speak(e.args.text); }
-      else log(`text-tier say (not ours to perform): "${e.args.text.slice(0, 40)}"`);
+      // #57 B1: the voice leg speaks what the body says — EVERY own say, no
+      // flag consulted (spoken:true was topology-A's authored claim; servers
+      // no longer stamp it, and capability-derived stamps were rejected in
+      // review). Double-speak is prevented on the LISTENER side: our presence
+      // as a voice leg makes listeners hold local TTS, and the attest we send
+      // after airing converts the hold into a skip. If we die mid-utterance
+      // the receipt never goes out and every listener falls back — degraded,
+      // never silent.
+      log(`performing seq ${(msg.entry as { seq?: number }).seq}: "${e.args.text.slice(0, 60)}"`);
+      speak(e.args.text, (msg.entry as { seq?: number }).seq);
     }
     return;
   }
