@@ -72,6 +72,7 @@ async function bodySay(text: string): Promise<void> {
     Array<{ webSocketDebuggerUrl?: string; url?: string }>;
   const tab = tabs.find((t) => t.url?.includes('world=') && t.webSocketDebuggerUrl);
   if (!tab?.webSocketDebuggerUrl) throw new Error('no body page found on CDP');
+  log(`bodySay → ${tab.url?.slice(0, 70)}`);
   const ws = new WebSocket(tab.webSocketDebuggerUrl);
   await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = () => rej(new Error('CDP connect failed')); });
   try {
@@ -81,7 +82,15 @@ async function bodySay(text: string): Promise<void> {
       const t = setTimeout(() => rej(new Error('CDP eval timeout')), 5000);
       ws.onmessage = (ev) => {
         const m = JSON.parse(String(ev.data));
-        if (m.id === 1) { clearTimeout(t); m.error ? rej(new Error(m.error.message)) : res(); }
+        if (m.id !== 1) return;
+        clearTimeout(t);
+        // A page-side exception is NOT an RPC error: it arrives as
+        // exceptionDetails on a successful-looking response. Checking only
+        // m.error reported 'delivered' for a say that never happened.
+        const exc = m.result?.exceptionDetails;
+        if (m.error) rej(new Error(m.error.message));
+        else if (exc) rej(new Error(`page threw: ${exc.exception?.description ?? exc.text}`));
+        else res();
       };
     });
   } finally { ws.close(); }
@@ -142,7 +151,7 @@ class EidoVoiceServer {
     const result: McplInitializeResult05 = {
       protocolVersion: '2024-11-05',
       capabilities,
-      serverInfo: { name: 'eido-voice-mcpl', version: '0.2.0' },
+      serverInfo: { name: 'eido-voice-mcpl', version: '0.3.0' },
     };
     conn.sendResponse(msg.request.id, result);
     log(`initialize answered (channel ${CHANNEL_ID}; awaiting policy)`);
@@ -301,8 +310,14 @@ function extractText(p: Record<string, unknown>): string {
   const c = p.content;
   if (typeof c === 'string') return c;
   if (Array.isArray(c)) {
-    return c.filter((b) => b && (b as { type?: string }).type === 'text')
+    const t = c.filter((b) => b && (b as { type?: string }).type === 'text')
       .map((b) => String((b as { text?: string }).text ?? '')).join('');
+    // An empty utterance is a caller bug, not a delivery: saying '' would be
+    // silently dropped by the world and reported here as delivered:true —
+    // which is how a mis-shaped publish (e.g. {content} where the caller
+    // meant {text}) masqueraded as success for five straight smoke tests.
+    if (!t.trim()) throw new Error('publish: text content is empty');
+    return t;
   }
   throw new Error('publish: no text content');
 }

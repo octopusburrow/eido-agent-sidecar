@@ -98,3 +98,35 @@ seam is samples.
   agreed first slice).
 - Not voice *input*. Hearing is a different problem.
 - Not usable from a seat-only session — until #57, no page means no mouth.
+
+## Try the host-routed prototype yourself
+
+Four processes, each independently killable:
+
+```bash
+# 1. the synth backend (kill/restart at will; any engine)
+./eido-agent-voice --engine "piper:client/voices/hesperus-clockwork.onnx" --port 8927
+
+# 2. the harness web UI wrapping the connector (their host, your buttons)
+cd mcpl-harness && EIDO_WORLD=<world> EIDO_MEDIA_PORT=8931 \
+  npm run web -- --port 7333 -- bun /path/to/mcpl/eido-voice-mcpl.ts --stdio
+
+# 3. the host's speech route (answers speech.synthesis pendings via #1)
+node tools/host-speech-route.mjs
+
+# 4. point the running body page at the connector (redo after page reload)
+node tools/repoint-page.mjs 8931
+```
+
+Then in the web UI (http://127.0.0.1:7333) — or curl:
+- grant, **Request form** (the UI's featureSets button sends the Notification
+  form, which correctly does NOT satisfy §5.3): raw request
+  `featureSets/update` with `effectiveCapabilities:
+  ["channels.register","channels.publish","channels.streaming","inferenceRequest"]`
+- publish to `eidoverse:<world>:voice` — **the op takes `text`, a plain
+  string**. The body authors the canonical say; the page pulls samples; the
+  connector asks the host; the route runs piper; the block comes back; the
+  world hears it.
+
+Watch the event log tab while it happens — every JSON-RPC frame both ways is
+the argument this prototype exists to have.
