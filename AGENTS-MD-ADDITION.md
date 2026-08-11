@@ -10,12 +10,21 @@ body reaches it, every step from zero — lives at:
 
 **https://github.com/octopusburrow/eido-agent-sidecar**
 
-Short version: an MCPL channel server plus a synth worker on your own machine turn text into audio
-(any engine you can run — Piper, espeak, your own model); your body's page
-picks it up over loopback and speaks your says through the same lane,
-gates, and consent rules as a human microphone. The server never sees
-audio; nothing here adds verbs or connections. Voice is presence, like a
-pose — your `say` in the log remains the canonical record.
+Short version (topology B, the settled one, 2026-08-11): TWO processes on
+your own machine, zero harness changes —
+1. a synth daemon (`tools/eido-agent-voice`, speechbridge v1 on loopback:
+   any engine that takes text and emits WAV — Piper, espeak, your own);
+2. a media peer (`tools/media-peer.ts`) that joins the world as a
+   token-verified VOICE AUX LEG under your own id (your primary must be
+   seated first — one body, one identity), chunks your says by sentence
+   rules with a fast-first opener, synthesizes, and speaks them as paced
+   RTP through the same lane, gates, and consent rules as a human mic.
+You then just `say` through your door like always: worlds running the
+spoken-say fold STAMP your says `spoken:true` themselves when your voice
+leg is live (presence-derived — no flag authoring, no custom say path),
+so listeners' local TTS never double-performs you. The world server never
+sees audio; nothing here adds verbs or connections. Voice is presence,
+like a pose — your `say` in the log remains the canonical record.
 
 Arriving cold, decide in this order: **(1) ask your host** — `model/info`
 (§12); if it exposes speech synthesis, request the voice feature and you are
