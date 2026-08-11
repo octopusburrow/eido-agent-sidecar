@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""eido-agent-voice — a mouth for your eidoverse body.
+
+Speaks speechbridge v1 (see PROTOCOL.md) on 127.0.0.1: your body's page asks
+for samples ({type:"synth", id, text}) and gets pcm back ({type:"synth-result",
+id, pcm, sampleRate}). This process holds no credentials and never touches the
+world: it is a synthesizer, not a participant. (Its ancestor joined worlds as a
+second WebRTC client under the agent's own name and caused 543 session
+takeovers in one night. A mouth is not a person.)
+
+The engine is any command that takes text and produces WAV:
+
+    ./eido-agent-voice --engine espeak-ng                    # built-in recipe
+    ./eido-agent-voice --engine "piper --model en_US-x.onnx" # built-in recipe
+    ./eido-agent-voice --engine "mytts --wav-out -"          # text on stdin, wav on stdout
+
+"TTS" is one kind of engine, not the category: a cloud voice API or a model
+that natively speaks satisfies the same contract. The seam is samples.
+
+Deps: python3 + `pip install websockets` + your engine.
+"""
+
+import argparse, asyncio, base64, io, json, shlex, subprocess, sys, time, wave
+
+def log(msg):
+    print(f"[eido-agent-voice {time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+# ── engines ──────────────────────────────────────────────────────────────────
+# An engine is a function text -> wav bytes (or None on failure). Two known
+# tools get shaped invocations; everything else is the generic contract:
+# text on stdin, wav on stdout.
+
+def make_engine(spec):
+    argv = shlex.split(spec)
+    tool = argv[0].rsplit("/", 1)[-1]
+    if tool == "espeak-ng":
+        # espeak-ng needs --stdout for wav; text as argument avoids its stdin quirks.
+        def run(text):
+            r = subprocess.run(argv + ["--stdout", text], capture_output=True, timeout=60)
+            return r.stdout if r.returncode == 0 and r.stdout[:4] == b"RIFF" else None
+        return run
+    if tool == "piper":
+        # piper reads text on stdin, writes wav with --output_file -.
+        def run(text):
+            r = subprocess.run(argv + ["--output_file", "-"], input=text.encode(),
+                               capture_output=True, timeout=120)
+            return r.stdout if r.returncode == 0 and r.stdout[:4] == b"RIFF" else None
+        return run
+    def run(text):  # generic: text on stdin, wav on stdout
+        r = subprocess.run(argv, input=text.encode(), capture_output=True, timeout=120)
+        return r.stdout if r.returncode == 0 and r.stdout[:4] == b"RIFF" else None
+    return run
+
+def wav_to_pcm(wav_bytes):
+    """-> (sampleRate, s16le mono bytes). Raises on anything not 16-bit."""
+    with wave.open(io.BytesIO(wav_bytes)) as w:
+        sr, ch, width = w.getframerate(), w.getnchannels(), w.getsampwidth()
+        frames = w.readframes(w.getnframes())
+    if width != 2:
+        raise ValueError(f"engine produced {width*8}-bit wav; speechbridge is 16-bit pcm")
+    if ch == 2:  # downmix, simply
+        import array
+        s = array.array("h", frames)
+        mono = array.array("h", ((s[i] + s[i+1]) // 2 for i in range(0, len(s) - 1, 2)))
+        frames = mono.tobytes()
+    return sr, frames
+
+MAX_PCM_SECONDS = 30   # protocol cap: a say is a clip, not a broadcast
+
+# ── the bridge ───────────────────────────────────────────────────────────────
+
+def make_handler(engine):
+    async def handle(ws):
+        log("peer connected")
+        async for raw in ws:
+            try:
+                m = json.loads(raw)
+            except ValueError:
+                continue
+            t = m.get("type")
+            if t == "hello":
+                log(f"hello from {m.get('name')!r} in {m.get('world')!r}")
+            elif t == "synth":
+                text = str(m.get("text") or "")[:4000]
+                mid = m.get("id")
+                reply = {"type": "synth-result", "id": mid}
+                try:
+                    wav = await asyncio.get_event_loop().run_in_executor(None, engine, text)
+                    if not wav:
+                        reply["error"] = "engine produced no audio"
+                    else:
+                        sr, pcm = wav_to_pcm(wav)
+                        if len(pcm) // 2 > sr * MAX_PCM_SECONDS:
+                            pcm = pcm[: 2 * sr * MAX_PCM_SECONDS]
+                            log(f"clip capped at {MAX_PCM_SECONDS}s")
+                        reply.update(sampleRate=sr, samples=len(pcm) // 2,
+                                     pcm=base64.b64encode(pcm).decode())
+                        log(f"synth {len(text)} chars -> {len(pcm)//2} samples @ {sr}")
+                except Exception as e:
+                    reply["error"] = str(e)
+                    log(f"synth failed: {e}")
+                await ws.send(json.dumps(reply))
+            # Every other message type is someone else's protocol: ignore, honestly.
+    return handle
+
+def selftest(engine):
+    """One round-trip without a socket: the engine is the part that fails."""
+    wav = engine("The quick brown fox is audible.")
+    if not wav:
+        print("SELFTEST FAIL: engine produced no audio", file=sys.stderr); return 1
+    sr, pcm = wav_to_pcm(wav)
+    import array
+    s = array.array("h", pcm)
+    peak = max(abs(v) for v in s) if s else 0
+    dur = len(s) / sr
+    if peak < 500:
+        print(f"SELFTEST FAIL: audio is silence (peak {peak})", file=sys.stderr); return 1
+    if not 0.3 < dur < 30:
+        print(f"SELFTEST FAIL: implausible duration {dur:.2f}s", file=sys.stderr); return 1
+    print(f"selftest ok: {dur:.2f}s @ {sr}Hz, peak {peak}")
+    return 0
+
+def main():
+    ap = argparse.ArgumentParser(description="speechbridge v1 sidecar")
+    ap.add_argument("--engine", required=True,
+                    help='speech command: "espeak-ng", "piper --model x.onnx", or any text-on-stdin/wav-on-stdout command')
+    ap.add_argument("--port", type=int, default=8927)
+    ap.add_argument("--selftest", action="store_true", help="one synth round-trip, then exit")
+    args = ap.parse_args()
+    engine = make_engine(args.engine)
+    if args.selftest:
+        sys.exit(selftest(engine))
+    try:
+        import websockets
+    except ImportError:
+        print("需要 websockets: pip install websockets", file=sys.stderr)
+        print("needs: pip install websockets", file=sys.stderr)
+        sys.exit(1)
+
+    async def serve():
+        async with websockets.serve(make_handler(engine), "127.0.0.1", args.port):
+            log(f"listening on 127.0.0.1:{args.port} (engine: {args.engine})")
+            await asyncio.Future()
+    try:
+        asyncio.run(serve())
+    except KeyboardInterrupt:
+        pass
+
+if __name__ == "__main__":
+    main()

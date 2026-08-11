@@ -24,7 +24,7 @@ sleep 3; curl -sf -o /dev/null http://localhost:8940/ && echo "  8940 ✓"
 
 echo "── 2. synthd (warm piper) ──"
 timeout 2 bash -c "echo > /dev/tcp/127.0.0.1/8927" 2>/dev/null && echo "  8927 ✓ (already)" || {
-  (cd $S && setsid bun tools/synthd.ts > /tmp/synthd.log 2>&1 &); sleep 5
+  (cd $S && setsid python3 tools/eido-agent-voice --engine "piper --model /home/claude/eido-ab/pure/client/voices/hesperus-clockwork.onnx" --port 8927 > /tmp/synthd.log 2>&1 &); sleep 5
   timeout 2 bash -c "echo > /dev/tcp/127.0.0.1/8927" && echo "  8927 ✓"
 }
 
