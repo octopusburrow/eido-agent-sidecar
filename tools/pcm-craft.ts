@@ -41,6 +41,18 @@ export function fade(data: Uint8Array, rate: number): void {
     s[s.length - 1 - k] = Math.round(s[s.length - 1 - k] * g);
   }
 }
+// House loudness (−23 LUFS, reference_webaudio_spatial_gotchas): raw piper
+// measures −17.9 LUFS with true-peak at 0 dBTP — 5 dB hot and clip-prone in
+// the opus encode. A STATIC −5 dB (piper's level is consistent per voice)
+// lands ≈ −23 with ~−5 dBTP headroom, at zero latency — streaming loudnorm
+// would buy the same number with seconds of lookahead, straight out of TTFW.
+export const GAIN_DB = -5;
+const GAIN = Math.pow(10, GAIN_DB / 20);
+export function applyGain(data: Uint8Array): void {
+  const s = i16(data);
+  for (let k = 0; k < s.length; k++) s[k] = Math.round(s[k] * GAIN);
+}
+
 export function silencePcm(ms: number, rate: number): Uint8Array {
   return new Uint8Array(Math.round((ms / 1000) * rate) * 2);
 }

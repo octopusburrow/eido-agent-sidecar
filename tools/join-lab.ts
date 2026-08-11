@@ -3,6 +3,7 @@
  *  WAVs, and print discontinuity metrics. Capture, not ears. */
 import { ttsChunks } from './tts-chunk.ts';
 import { trimEdges, fade, silencePcm, sentenceFinal, i16, BREATH_MS } from './pcm-craft.ts';
+import { applyGain } from './pcm-craft.ts';
 
 const SYNTH = 'ws://127.0.0.1:8927';
 const RATE = 22050;
@@ -70,7 +71,7 @@ console.log(`before: raw join jumps = [${joinJumps(raws).join(', ')}] (s16 units
 // NEW path: trim + fade + breath only at sentence-finals
 const newParts: Uint8Array[] = [];
 raws.forEach((r, idx) => {
-  const t = trimEdges(r, RATE); fade(t, RATE);
+  const t = trimEdges(r, RATE); applyGain(t); fade(t, RATE);
   newParts.push(t);
   if (idx < raws.length - 1 && sentenceFinal(chunks[idx])) newParts.push(silencePcm(BREATH_MS, RATE));
 });

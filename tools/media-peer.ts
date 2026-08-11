@@ -221,7 +221,7 @@ function ensureEncoder(): Subprocess<'pipe'> {
   return encoder;
 }
 
-import { trimEdges, fade, silencePcm, sentenceFinal, BREATH_MS } from './pcm-craft.ts';
+import { trimEdges, fade, silencePcm, sentenceFinal, applyGain, BREATH_MS } from './pcm-craft.ts';
 
 async function writePcm(data: Uint8Array): Promise<void> {
   const ff = ensureEncoder();
@@ -240,6 +240,7 @@ async function speakNow(text: string, opts?: { pcmReady?: Promise<{ data: Uint8A
   if (!pcm) return;
   if (pcm.rate !== PIPER_RATE) { log(`unexpected synth rate ${pcm.rate} — skipping`); return; }
   const trimmed = trimEdges(pcm.data, pcm.rate);
+  applyGain(trimmed);
   fade(trimmed, pcm.rate);
   await writePcm(trimmed);
   if (opts?.breathAfter !== false) await writePcm(silencePcm(BREATH_MS, pcm.rate));
