@@ -252,8 +252,8 @@ function synth(text: string): Promise<{ data: Uint8Array; rate: number } | null>
 // ── the world ws: aux-leg join + say watch + presence-driven offers ─────────
 world = new WebSocket(URL_);
 world.onopen = () => {
-  world.send(JSON.stringify({ type: 'join', world: WORLD, id: ID, surface: 'voice', agent: true, agentToken: agentToken() }));
-  log(`joined ${WORLD} as ${ID}/voice (aux leg)`);
+  world.send(JSON.stringify({ type: 'join', world: WORLD, id: ID, surface: 'voice', agent: true, agentToken: agentToken(), token: arg('join-token', 'workbench-2026') }));
+  log(`join sent: ${WORLD} as ${ID}/voice (aux leg) — awaiting ack`);
 };
 world.onmessage = (ev) => {
   const msg = JSON.parse(String(ev.data)) as Record<string, unknown>;

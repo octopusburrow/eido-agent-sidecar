@@ -142,6 +142,7 @@ function legConnect(): Promise<WebSocket> {
     ws.onopen = () => ws.send(JSON.stringify({
       type: 'join', world: WORLD, id: ECHO_ID,
       surface: 'mcpl', agent: true, agentToken: process.env.EIDO_AGENT_TOKEN ?? '',
+      token: process.env.EIDO_JOIN_TOKEN ?? 'workbench-2026',
     }));
     ws.onmessage = (ev) => {
       const m = JSON.parse(String(ev.data)) as { type?: string; error?: string };
