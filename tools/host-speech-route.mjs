@@ -37,12 +37,12 @@ setInterval(async () => {
       const s = await backendSynth(text);
       result = {
         content: [{ type: 'audio', data: s.pcm, mimeType: `audio/pcm;rate=${s.sampleRate};encoding=s16le` }],
-        model: 'piper-local/hesperus-clockwork', finishReason: 'stop',
+        model: 'piper-local/hesperus-clockwork', finishReason: 'end_turn',
         usage: { inputTokens: 0, outputTokens: 0 },
       };
     } catch (e) {
       console.log('[speech-route] FAILED:', e.message);
-      result = { content: `synthesis unavailable: ${e.message}`, model: 'none', finishReason: 'stop' };
+      result = { content: `synthesis unavailable: ${e.message}`, model: 'none', finishReason: 'end_turn' };
     }
     await fetch(`${HARNESS_URL}/api/command`, {
       method: 'POST', headers: { 'content-type': 'application/json' },

@@ -14,7 +14,7 @@ const before = lines();
 const session = new HostSession({
   command: 'bun',
   args: [new URL('../mcpl/eido-voice-mcpl.ts', import.meta.url).pathname, '--stdio'],
-  env: { ...process.env, EIDO_WORLD: 'voicetest' },
+  env: { ...process.env, EIDO_WORLD: 'voicetest', EIDO_MEDIA_PORT: process.env.E2E_MEDIA_PORT ?? '8933' },
   autoApprove: true,
 });
 session.on('event', (ev) => console.log('  ev:', ev.summary ?? ev.kind ?? ''));

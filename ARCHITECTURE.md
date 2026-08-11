@@ -39,6 +39,10 @@ kept deliberately dumb.
 agent's machine runs: MCPL host → this server → CDP → browser body page →
 synth worker → WebRTC. Most agent hosts are inference-capable machines
 (Rabscuttle's point), so this covers more of the fleet than it first sounds.
+*Minimal-A note (independent review):* an agent that already holds an
+ordinary door and a page with own-say TTS (#91) needs only the synth worker
+and `?tts=` — the MCPL connector is optional in A, earning its keep when the
+say path should be host-mediated or streamed.
 
 **B — sidecar-owned media peer (roadmap; Mica's acceptance question).** For
 bodies with no co-located browser: this process owns the WebRTC peer itself,
@@ -52,9 +56,12 @@ sending `inference/request` (featureSet `speech.synthesis`) to the HOST,
 which routes to a standalone synth process it can kill/restart at will, and
 returns ONE sentence-sized §10.3 audio block in the response — the field
 §11.3 currently pins to `string`. No realtime frames in JSON-RPC (Mica's
-line); warmth becomes a host-backend property; the sidecar decays into a
-reference backend. Receipt: `tools/e2e-inference.mjs` (their harness playing
-host). Proposal draft: notes → mcpl issue, pending review.
+line). Honest scope (independent review): C *relocates* the local sample
+pipe to the host's side rather than deleting it — the synth process remains,
+host-owned; what C buys is §11.5 policy ownership (routing, audit, warmth,
+one warm endpoint amortized across a fleet, per-agent voices via §11.2
+preferences). C is a spec-issue receipt, not a third product topology.
+Receipt: `tools/e2e-inference.mjs` (their harness playing host).
 
 ## Verification
 
@@ -75,3 +82,23 @@ is `@animalabs/mcpl-core`.
 If browser-side engines ever hold models warm, the synth worker itself
 becomes optional and this repo approaches pure documentation. That would be
 success, not loss.
+
+## Utterance identity
+
+`channels/publish` acks `messageId: "utt:<n>"` (§14.3); the say is authored
+with the world's own `utt` field on the LIVE broadcast, and host synthesis
+is tagged `metadata.utterance`. The durable log's say-fold keeps only text
+BY DESIGN (two-plane doctrine: pairing is presentation, the log is record) —
+so the linkage lives on every wire where presentation happens, and nowhere
+it doesn't.
+
+## Named threat — local authority to speak
+
+`bodySay` rides the body page's CDP debug port; the media lane and synth
+worker are open loopback. On a single-user machine (this kit's assumption)
+that is the same trust boundary as the agent's own process space. On a
+SHARED machine, any local process can author canonical says in the agent's
+identity — impersonation-with-voice. Mitigations (planned, not shipped):
+per-session token in the CDP launch handshake and media-lane hello;
+Mica's "bound to the authenticated MCPL session/epoch" applies to every one
+of these surfaces, not only the future media peer.

@@ -91,7 +91,7 @@ const before = lines();
 const session = new HostSession({
   command: 'bun',
   args: [new URL('../mcpl/eido-voice-mcpl.ts', import.meta.url).pathname, '--stdio'],
-  env: { ...process.env, EIDO_WORLD: 'voicetest', EIDO_MEDIA_PORT: '8931' },
+  env: { ...process.env, EIDO_WORLD: 'voicetest', EIDO_MEDIA_PORT: process.env.E2E_MEDIA_PORT ?? '8931' },
   autoApprove: false,
 });
 session.on('event', (ev) => console.log('  ev:', ev.summary ?? ''));
@@ -110,12 +110,12 @@ const poll = setInterval(async () => {
       session.resolvePending(p.pendingId, {
         content: [{ type: 'audio', data: s.pcm, mimeType: `audio/pcm;rate=${s.sampleRate};encoding=s16le` }],
         model: 'piper-local/hesperus-clockwork',
-        finishReason: 'stop',
+        finishReason: 'end_turn',
         usage: { inputTokens: 0, outputTokens: 0 },
       });
     } catch (e) {
       console.log('  host route FAILED:', e.message);
-      session.resolvePending(p.pendingId, { content: 'synthesis unavailable', model: 'none', finishReason: 'stop' });
+      session.resolvePending(p.pendingId, { content: 'synthesis unavailable', model: 'none', finishReason: 'end_turn' });
     }
   }
 }, 300);
@@ -125,7 +125,7 @@ await session.raw('featureSets/update', {
 });
 await new Promise((r) => setTimeout(r, 800));
 
-const { port: debugPort } = await repointPage(8931);
+const { port: debugPort } = await repointPage(Number(process.env.E2E_MEDIA_PORT ?? 8931));
 console.log('  page tts source → connector (mcpl-host-routed)');
 
 await session.raw('channels/publish', {

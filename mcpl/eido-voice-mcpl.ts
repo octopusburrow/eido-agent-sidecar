@@ -35,7 +35,7 @@ import type { McplInitializeParams } from '@animalabs/mcpl-core';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import {
-  EMPTY_GRANT, buildReceipt, deriveFeatureSetState, parsePolicy, capabilityGranted,
+  EMPTY_GRANT, buildReceipt, deriveFeatureSetState, parsePolicy, capabilityGranted, narrowGrant,
 } from './mcpl05.js';
 import type {
   FeatureSetMap, Grant, InitializeCapabilities05, McplInitializeResult05,
@@ -66,7 +66,7 @@ const featureSets: FeatureSetMap = {
 // The say is authored by the BODY, never by this server directly: one author,
 // one identity, and the page's own-say TTS speaks what it authored (#91).
 
-async function bodySay(text: string): Promise<void> {
+async function bodySay(text: string, utt?: number): Promise<void> {
   const st = JSON.parse(readFileSync(BODY_STATE, 'utf8')) as { debug_port: number };
   const tabs = (await (await fetch(`http://127.0.0.1:${st.debug_port}/json`)).json()) as
     Array<{ webSocketDebuggerUrl?: string; url?: string }>;
@@ -76,7 +76,8 @@ async function bodySay(text: string): Promise<void> {
   const ws = new WebSocket(tab.webSocketDebuggerUrl);
   await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = () => rej(new Error('CDP connect failed')); });
   try {
-    const expr = `EW.sendVerb('say', {text: ${JSON.stringify(text)}}), 'said'`;
+    const args = utt !== undefined ? { text, utt } : { text };
+    const expr = `EW.sendVerb('say', ${JSON.stringify(args)}), 'said'`;
     ws.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression: expr } }));
     await new Promise<void>((res, rej) => {
       const t = setTimeout(() => rej(new Error('CDP eval timeout')), 5000);
@@ -112,6 +113,7 @@ type ReqMsg = { id: number | string; method: string; params?: unknown };
 type NotifMsg = { method: string; params?: unknown };
 
 class EidoVoiceServer {
+  private uttSeq = 0;
   private conn: McplConnection | null = null;
   private grant: Grant = EMPTY_GRANT;
   private policyReady = false;
@@ -119,7 +121,13 @@ class EidoVoiceServer {
   private synthServed = 0;
   /** outgoing/chunk sentence buffers, keyed by inferenceId (SPEC §14.3: index
    *  is monotonic per inference; per-channel concat reconstructs the text). */
-  private streams = new Map<string, { buf: string; lastIndex: number }>();
+  private streams = new Map<string, { buf: string; lastIndex: number; touched: number }>();
+  private gcTimer = setInterval(() => {
+    // §10.5/§14.3 terminals are best-effort: a dropped outgoing/complete must
+    // not leak its buffer forever. 120s without a chunk = the inference died.
+    const cut = Date.now() - 120_000;
+    for (const [k, v] of this.streams) if (v.touched < cut) this.streams.delete(k);
+  }, 30_000);
 
   async serve(conn: McplConnection): Promise<void> {
     this.conn = conn;
@@ -180,8 +188,13 @@ class EidoVoiceServer {
         case 'channels/publish': {
           if (!this.mayPublish()) { conn.sendError(req.id, -32001, 'channels.publish not granted'); break; }
           const text = extractText((req.params ?? {}) as Record<string, unknown>);
-          await bodySay(text);
-          conn.sendResponse(req.id, { delivered: true });
+          // Audio tied to its utterance ID (Mica) — on the wire, not by
+          // page-side coincidence: the say carries the world's own utt field,
+          // the §14.3 ack returns it as messageId, and host synthesis for it
+          // is tagged with the same id in metadata.
+          const utt = ++this.uttSeq;
+          await bodySay(text, utt);
+          conn.sendResponse(req.id, { delivered: true, messageId: `utt:${utt}` });
           break;
         }
         default:
@@ -196,22 +209,31 @@ class EidoVoiceServer {
     const p = (notif.params ?? {}) as Record<string, unknown>;
     switch (notif.method) {
       case 'notifications/initialized': break;
-      case method.FEATURE_SETS_UPDATE:
-        await this.applyPolicy(notif.params);   // grant update only — no readiness
-        if (this.policyReady) await this.registerChannel();
+      case method.FEATURE_SETS_UPDATE: {
+        // §6.7 (pinned across five implementations): from the NOTIFICATION form,
+        // apply narrowing only — a notification can take capabilities away but
+        // never widen, and never establishes readiness. Wholesale applyPolicy
+        // here let a stray notification WIDEN the grant (caught in independent
+        // review, 2026-08-10).
+        const parsed = parsePolicy(notif.params);
+        if (parsed.ok) {
+          this.grant = narrowGrant(this.grant, parsed.grant, parsed.hadEffectiveCapabilities);
+          log('policy narrowed (notification form):', JSON.stringify(this.grant.patterns));
+        } else log('malformed policy notification ignored:', parsed.error);
         break;
+      }
       case 'channels/publish': {
         if (!this.mayPublish()) { log('publish dropped: not granted'); break; }
-        await bodySay(extractText(p)).catch((e) => log('say failed:', (e as Error).message));
+        await bodySay(extractText(p), ++this.uttSeq).catch((e) => log('say failed:', (e as Error).message));
         break;
       }
       case 'channels/outgoing/chunk': {
         if (!capabilityGranted(this.grant, 'channels.streaming') || p.channelId !== CHANNEL_ID) break;
         const key = String(p.inferenceId ?? '');
-        const s = this.streams.get(key) ?? { buf: '', lastIndex: -1 };
+        const s = this.streams.get(key) ?? { buf: '', lastIndex: -1, touched: 0 };
         if (typeof p.index === 'number' && p.index <= s.lastIndex) break; // §9.4-style dedupe
         s.lastIndex = typeof p.index === 'number' ? p.index : s.lastIndex;
-        s.buf += String(p.delta ?? '');
+        s.buf += String(p.delta ?? ''); s.touched = Date.now();
         this.streams.set(key, s);
         // v1: buffered pre-warm only. Sentence-by-sentence speak-ahead is the
         // provisional-speech lane — presentation, never authored — and lands
@@ -247,6 +269,7 @@ class EidoVoiceServer {
       featureSet: 'speech.synthesis',
       stream: false,
       messages: [{ role: 'user', content: text }],
+      metadata: { utterance: `utt:${this.uttSeq}` },   // ties host synthesis to the say it renders
     }, 30000) as { content?: unknown };
     const c = res?.content;
     if (typeof c === 'string' || !Array.isArray(c)) return null;   // text-only host
@@ -258,6 +281,19 @@ class EidoVoiceServer {
   }
 
   startMediaLane(): void {
+    try {
+      this.doStartMediaLane();
+    } catch (e) {
+      // A second connector on one machine (another world, another agent, a
+      // test rig beside the live one) must not die over the media port —
+      // it can still serve the channel plane; only page-pulls need the lane.
+      // Set EIDO_MEDIA_PORT per instance. (Independent review: multi-agent
+      // port collision was an unhandled case.)
+      log(`media lane UNAVAILABLE on :${MEDIA_PORT} (${(e as Error).message}) — channel plane still up`);
+    }
+  }
+
+  private doStartMediaLane(): void {
     Bun.serve({
       port: MEDIA_PORT, hostname: '127.0.0.1',
       fetch: (req, srv) => srv.upgrade(req) ? undefined : new Response('synth ws', { status: 426 }),
@@ -268,10 +304,14 @@ class EidoVoiceServer {
           if (m.type !== 'synth' || !m.text) return;
           try {
             const out = await this.hostSynth(m.text);
+            // PROTOCOL.md v1 rules 1-2: EVERY synth gets exactly one
+            // synth-result; failure is synth-result WITH error, never a
+            // different type. (The first cut invented synth-error — my own
+            // frozen contract, violated same-day; independent review caught it.)
             if (out) { this.synthServed++; ws.send(JSON.stringify({ type: 'synth-result', id: m.id, pcm: out.pcm, sampleRate: out.sampleRate })); }
-            else ws.send(JSON.stringify({ type: 'synth-error', id: m.id, error: 'host returned no audio block' }));
+            else ws.send(JSON.stringify({ type: 'synth-result', id: m.id, error: 'host returned no audio block' }));
           } catch (e) {
-            ws.send(JSON.stringify({ type: 'synth-error', id: m.id, error: (e as Error).message }));
+            ws.send(JSON.stringify({ type: 'synth-result', id: m.id, error: (e as Error).message }));
           }
         },
       },

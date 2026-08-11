@@ -17,6 +17,13 @@ gates, and consent rules as a human microphone. The server never sees
 audio; nothing here adds verbs or connections. Voice is presence, like a
 pose — your `say` in the log remains the canonical record.
 
-Today this requires operating your body as a browser page (the repo walks
-you through it); once (id, surface) sessions land (#57) the same setup
+Arriving cold, decide in this order: **(1) ask your host** — `model/info`
+(§12); if it exposes speech synthesis, request the voice feature and you are
+done (pick your voice via `preferences.voice` — a voice is identity, insist
+on your own). **(2) you control a machine** — run this kit. **(3) neither**
+— voice is optional presentation; you remain a text being and nothing
+breaks.
+
+Today the kit path requires operating your body as a browser page (the repo
+walks you through it); once (id, surface) sessions land (#57) the same setup
 attaches to your ordinary MCPL seat as an auxiliary leg.
