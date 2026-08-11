@@ -40,8 +40,9 @@ curl -sm 15 -X POST http://127.0.0.1:7334/api/command -H 'content-type: applicat
   | grep -q '"accepted":true' && echo "  policy ✓"
 
 echo "── 4. aux media peer (needs the primary above alive FIRST) ──"
-pkill -f "media-pee[r].ts" 2>/dev/null; sleep 1
-(cd $S && setsid bun tools/media-peer.ts >> /tmp/media-peer.log 2>&1 &)
+pkill -f "media-pee[r].ts" 2>/dev/null; pkill -f "run-media-pee[r]" 2>/dev/null; sleep 1
+# watchdog wrapper: relaunches on transient loss (4007), stays down on takeover (4002)
+(cd $S && setsid tools/run-media-peer.sh >> /tmp/media-peer.log 2>&1 &)
 sleep 6
 
 echo "── receipt ──"
