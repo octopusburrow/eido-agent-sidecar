@@ -21,8 +21,8 @@ const ABBREVS = new Set([
   'no', 'vol', 'fig', 'dept', 'est', 'min', 'max', 'misc',
   'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec',
 ]);
-const BOUNDARY = /[.!?…]+["')\]»]*\s/g;
-const SOFT = /(?:[,;:—–]["')\]»]*\s)|(?:\s(?=(?:and|but|so|or|yet|because|which|while|though|although)\s))/g;
+const BOUNDARY = /[.!?…]+["'’”)\]»]*\s/g;
+const SOFT = /(?:[,;:—–]["'’”)\]»]*\s)|(?:\s(?=(?:and|but|so|or|yet|because|which|while|though|although)\s))/g;
 const MIN_LEN = 20;
 const SOFT_LEN = 90;
 const SOFT_MIN = 35;
@@ -60,11 +60,45 @@ function splitLong(sentence: string): string[] {
     }
     if (!best) break;
     const end = best.index + best[0].length;
-    chunks.push(rest.slice(0, end).trim());
+    chunks.push(shapeContinuation(rest.slice(0, end).trim()));
     rest = rest.slice(end);
   }
   if (rest.trim()) chunks.push(rest.trim());
   return chunks;
+}
+
+const FIRST_MAX = 64;   // the opener: small enough that synth(first) is fast (research: 60-80)
+const FIRST_MIN = 20;   // ...but never a comic stub (research: 20-25 floor for piper quality)
+
+/** Split the OPENING chunk aggressively: time-to-first-word is synth(chunk 1),
+ *  so the first piece should be a short clause even when the sentence is long.
+ *  Relaxed minimum, any soft boundary, and a hard word-boundary cap as the
+ *  last resort — better a slightly abrupt first clause than a silent second. */
+function fastFirst(chunk: string): string[] {
+  if (chunk.length <= FIRST_MAX) return [chunk];
+  let cut = -1;
+  SOFT.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = SOFT.exec(chunk))) {
+    const end = m.index + m[0].length;
+    if (end < FIRST_MIN) continue;
+    if (end > FIRST_MAX) break;
+    cut = end;
+  }
+  if (cut < 0) {
+    const sp = chunk.lastIndexOf(' ', FIRST_MAX);
+    cut = sp > FIRST_MIN ? sp + 1 : -1;
+  }
+  if (cut < 0 || chunk.length - cut < FIRST_MIN) return [chunk];
+  return [shapeContinuation(chunk.slice(0, cut).trim()), chunk.slice(cut).trim()];
+}
+
+/** A mid-sentence chunk should END WITH A COMMA: espeak renders comma as a
+ *  continuation RISE where a bare end gets sentence-final FALL — the split
+ *  stops sounding like a full stop. (Research pass, 2026-08-10: the one
+ *  free prosody mitigation piper actually supports.) */
+function shapeContinuation(chunk: string): string {
+  return /[,;:—–.!?…]$/.test(chunk) ? chunk : chunk + ',';
 }
 
 /** A complete utterance → synthesis-sized spoken chunks (possibly none:
@@ -90,5 +124,7 @@ export function ttsChunks(text: string): string[] {
     if (glued.length && glued[glued.length - 1].length < MIN_LEN) glued[glued.length - 1] += ' ' + s;
     else glued.push(s);
   }
-  return glued.flatMap(splitLong);
+  const chunks = glued.flatMap(splitLong);
+  if (!chunks.length) return chunks;
+  return [...fastFirst(chunks[0]), ...chunks.slice(1)];
 }
