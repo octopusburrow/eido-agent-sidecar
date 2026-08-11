@@ -107,6 +107,76 @@ async function bodySay(text: string, utt?: number): Promise<void> {
 
 const MEDIA_PORT = Number(process.env.EIDO_MEDIA_PORT ?? 8931);
 
+// ── say authorship, topology B: no body page — author through a WORLD aux leg ─
+// EIDO_SAY_VIA=world-ws joins the world directly as surface:"mcpl" with the
+// agent's bearer (EIDO_AGENT_TOKEN); the lab's verified-aux-say rule (#57
+// design prototype) accepts say — and only say — from a token-proven leg.
+// The canonical log entry stays the ONE authoritative utterance either way.
+const SAY_VIA = process.env.EIDO_SAY_VIA ?? 'cdp';
+const WORLD_WS = process.env.EIDO_WORLD_WS ?? 'ws://127.0.0.1:8940/ws';
+let worldLeg: WebSocket | null = null;
+const ECHO_ID = process.env.EIDO_ID ?? 'hesperus';
+type EchoWaiter = { text: string; res: (seq: number) => void };
+const echoWaiters: EchoWaiter[] = [];
+
+function legHandleFrame(ev: MessageEvent): void {
+  const m = JSON.parse(String(ev.data)) as Record<string, unknown>;
+  // The server answers a refused verb with an error FRAME, not a closed
+  // socket. The first cut stopped listening after the join — five publishes
+  // reported delivered while every say bounced off the spectator gate.
+  if (m.type === 'error') { log(`world error: ${m.error}`); return; }
+  if (m.type === 'log') {
+    const e = m.entry as { seq?: number; actor?: string; verb?: string; args?: { text?: string } };
+    if (e?.verb === 'say' && e.actor === ECHO_ID) {
+      const i = echoWaiters.findIndex((w) => w.text === e.args?.text);
+      if (i >= 0) echoWaiters.splice(i, 1)[0].res(Number(e.seq ?? 0));
+    }
+  }
+}
+
+function legConnect(): Promise<WebSocket> {
+  return new Promise((res, rej) => {
+    if (worldLeg?.readyState === WebSocket.OPEN) return res(worldLeg);
+    const ws = new WebSocket(WORLD_WS);
+    const to = setTimeout(() => rej(new Error('world ws join timeout')), 8000);
+    ws.onopen = () => ws.send(JSON.stringify({
+      type: 'join', world: WORLD, id: ECHO_ID,
+      surface: 'mcpl', agent: true, agentToken: process.env.EIDO_AGENT_TOKEN ?? '',
+    }));
+    ws.onmessage = (ev) => {
+      const m = JSON.parse(String(ev.data)) as { type?: string; error?: string };
+      if (m.type === 'error') { clearTimeout(to); rej(new Error(`world: ${m.error}`)); ws.close(); return; }
+      if (m.type !== 'snapshot') return;   // join completes at the snapshot, not the first frame
+      clearTimeout(to); worldLeg = ws;
+      ws.onmessage = legHandleFrame;       // keep listening: errors and echoes both matter
+      res(ws);
+    };
+    ws.onclose = () => { if (worldLeg === ws) worldLeg = null; };
+    ws.onerror = () => { clearTimeout(to); rej(new Error('world ws error')); };
+  });
+}
+
+/** Deliver a say and resolve only on the AUTHORITATIVE log echo — send is not
+ *  delivery (the verified-aux-say hunt: sends acked as delivered while the
+ *  server refused every one). Returns the world-log seq. */
+async function worldLegSay(text: string, utt?: number): Promise<number> {
+  const ws = await legConnect();
+  const echoed = new Promise<number>((res, rej) => {
+    echoWaiters.push({ text, res });
+    setTimeout(() => {
+      const i = echoWaiters.findIndex((w) => w.res === res);
+      if (i >= 0) { echoWaiters.splice(i, 1); rej(new Error('say not echoed by world log within 5s')); }
+    }, 5000);
+  });
+  ws.send(JSON.stringify({ type: 'verb', verb: 'say', args: utt !== undefined ? { text, utt } : { text } }));
+  return echoed;
+}
+async function deliverSay(text: string, utt?: number): Promise<number | undefined> {
+  if (SAY_VIA === 'world-ws') return worldLegSay(text, utt);
+  await bodySay(text, utt);
+  return undefined;
+}
+
 // ── the server ───────────────────────────────────────────────────────────────
 
 type ReqMsg = { id: number | string; method: string; params?: unknown };
@@ -193,8 +263,8 @@ class EidoVoiceServer {
           // the §14.3 ack returns it as messageId, and host synthesis for it
           // is tagged with the same id in metadata.
           const utt = ++this.uttSeq;
-          await bodySay(text, utt);
-          conn.sendResponse(req.id, { delivered: true, messageId: `utt:${utt}` });
+          const seq = await deliverSay(text, utt);
+          conn.sendResponse(req.id, { delivered: true, messageId: seq !== undefined ? `seq:${seq}` : `utt:${utt}` });
           break;
         }
         default:
@@ -224,7 +294,7 @@ class EidoVoiceServer {
       }
       case 'channels/publish': {
         if (!this.mayPublish()) { log('publish dropped: not granted'); break; }
-        await bodySay(extractText(p), ++this.uttSeq).catch((e) => log('say failed:', (e as Error).message));
+        await deliverSay(extractText(p), ++this.uttSeq).catch((e) => log('say failed:', (e as Error).message));
         break;
       }
       case 'channels/outgoing/chunk': {
